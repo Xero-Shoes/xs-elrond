@@ -1,8 +1,13 @@
-# Core
-pymongo[srv]>=4.6,<5.0
+# MongoDB Atlas Data API (HTTP over 443 — no IP whitelisting needed)
+requests>=2.32,<3.0
+pymongo>=4.6,<5.0    # bson.ObjectId only — MongoClient not used
+
+# Anthropic (Elrond reasoning engine)
+anthropic>=0.89,<1.0
+
+# Env
 python-dotenv>=1.0,<2.0
 
 # Testing
 pytest>=8.0,<9.0
 pytest-mock>=3.12,<4.0
-certifi>=2024.0.0
