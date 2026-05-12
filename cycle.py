@@ -25,6 +25,18 @@ logger = logging.getLogger(__name__)
 # Statuses Elrond acts on
 ACTIONABLE_STATUSES = ["pending", "in_progress", "blocked", "waiting_human"]
 
+# Inbox classifications that generate elrond_tasks
+_TASK_CLASSIFICATIONS = {"needs_elrond", "feedback", "approval", "calendar_request", "interview_response"}
+
+# Classification → default spoke
+_CLASSIFICATION_SPOKE = {
+    "needs_elrond": "discovery",
+    "feedback": "discovery",
+    "approval": "finance",
+    "calendar_request": "calendar",
+    "interview_response": "discovery",
+}
+
 
 def run_cycle(context_tracker: ContextTracker | None = None) -> dict:
     """
@@ -35,6 +47,7 @@ def run_cycle(context_tracker: ContextTracker | None = None) -> dict:
     tracker = context_tracker or ContextTracker()
     summary = {
         "started_at": datetime.now(timezone.utc).isoformat(),
+        "inbox_tasks_created": 0,
         "tasks_processed": 0,
         "tasks_completed": 0,
         "tasks_blocked": 0,
@@ -43,6 +56,9 @@ def run_cycle(context_tracker: ContextTracker | None = None) -> dict:
         "handoff_triggered": False,
         "errors": [],
     }
+
+    # Convert new inbox items into tasks before processing
+    summary["inbox_tasks_created"] = _process_inbox()
 
     tasks = _load_active_tasks()
     logger.info(f"Cycle start: {len(tasks)} active tasks")
@@ -80,6 +96,70 @@ def _load_active_tasks() -> list[dict]:
         coll.find({"status": {"$in": ACTIONABLE_STATUSES}})
         .sort([("priority", 1), ("created_at", 1)])
     )
+
+
+def _process_inbox() -> int:
+    """Convert new strider_inbox items into elrond_tasks.
+
+    Reads inbox items that are not yet assigned to a task and creates
+    elrond_tasks for classifications that warrant Elrond action.
+    Items with non-actionable classifications are marked processed without
+    creating a task (Strider handled them directly).
+    Returns count of tasks created.
+    """
+    inbox = get_collection(STRIDER_INBOX)
+    tasks_coll = get_collection(ELROND_TASKS)
+
+    new_items = list(
+        inbox.find({
+            "processed_by_elrond": {"$ne": True},
+            "linked_task_id": {"$exists": False},
+        }).sort("created_at", 1)
+    )
+
+    if not new_items:
+        return 0
+
+    created = 0
+    for item in new_items:
+        classification = item.get("classification", "")
+
+        if classification not in _TASK_CLASSIFICATIONS:
+            # Strider already handled this — just mark it consumed
+            inbox.update_one(
+                {"_id": item["_id"]},
+                {"$set": {"processed_by_elrond": True}},
+            )
+            continue
+
+        spoke = _CLASSIFICATION_SPOKE.get(classification, "discovery")
+        text = item.get("text", "")
+        task_doc = {
+            "spoke": spoke,
+            "status": "pending",
+            "priority": 3,
+            "title": item.get("subject") or text[:80],
+            "description": text,
+            "source": "strider_inbox",
+            "source_inbox_id": item["_id"],
+            "from_slack_user_id": item.get("slack_user_id"),
+            "classification": classification,
+            "metadata": item.get("metadata", {}),
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        }
+        result = tasks_coll.insert_one(task_doc)
+        task_id = result.inserted_id
+
+        inbox.update_one(
+            {"_id": item["_id"]},
+            {"$set": {"linked_task_id": task_id, "processed_by_elrond": True}},
+        )
+        created += 1
+        logger.info("Created elrond_task %s from inbox %s (spoke=%s)", task_id, item["_id"], spoke)
+
+    logger.info("Inbox processing: %d tasks created from %d inbox items", created, len(new_items))
+    return created
 
 
 def _process_task(task: dict, tracker: ContextTracker, summary: dict) -> dict:
