@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 
+import certifi
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.collection import Collection
@@ -29,7 +30,7 @@ def get_client() -> MongoClient:
     global _client
     if _client is None:
         uri = os.environ["MONGO_URI"]
-        _client = MongoClient(uri)
+        _client = MongoClient(uri, tls=True, tlsCAFile=certifi.where())
     return _client
 
 

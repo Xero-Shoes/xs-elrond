@@ -5,3 +5,4 @@ python-dotenv>=1.0,<2.0
 # Testing
 pytest>=8.0,<9.0
 pytest-mock>=3.12,<4.0
+certifi>=2024.0.0
